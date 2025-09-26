@@ -1,18 +1,25 @@
 name: supabase-backup
 
 on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0'  # Runs every Sunday at midnight
+    - cron: "0 0 * * 0" # Runs every Sunday at midnight
+
+env:
+  BACKUP_ENABLED: true
 
 jobs:
-  backup:
+  run_db_backup:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      BACKUP_ENABLED: true
+      BACKUP_ENABLED: ${{ vars.BACKUP_ENABLED }} # Repository variable (true or false)
     steps:
       - name: Check if backups are enabled
         run: |
@@ -22,26 +29,39 @@ jobs:
           fi
 
       - name: Checkout repository
+        if: env.BACKUP_ENABLED == 'true'
         uses: actions/checkout@v3
 
-      - name: Set backup timestamp
+      - name: Setup Supabase CLI
+        if: env.BACKUP_ENABLED == 'true'
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Create timestamp folder
+        if: env.BACKUP_ENABLED == 'true'
         run: |
-          BACKUP_DATE=$(date +'%Y-%m-%d_%H-%M-%S')
-          echo "BACKUP_DATE=$BACKUP_DATE" >> $GITHUB_ENV
-          mkdir -p db_backups/$BACKUP_DATE
+          TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')
+          mkdir -p prisma/backups/$TIMESTAMP
+          echo "BACKUP_PATH=prisma/backups/$TIMESTAMP" >> $GITHUB_ENV
 
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Backup roles
+        if: env.BACKUP_ENABLED == 'true'
+        run: supabase db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_PATH/roles.sql" --role-only
 
-      - name: Run pg_dump to backup schema and data
-        run: |
-          export PGPASSWORD=$(echo $SUPABASE_DB_URL | sed -n 's/.*\/\/postgres:\([^@]*\)@.*/\1/p')
-          pg_dump --dbname=$SUPABASE_DB_URL --format=plain --file=db_backups/$BACKUP_DATE/full_backup.sql
+      - name: Backup schema
+        if: env.BACKUP_ENABLED == 'true'
+        run: supabase db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_PATH/schema.sql"
 
-      - name: Commit backup to repo
+      - name: Backup data
+        if: env.BACKUP_ENABLED == 'true'
+        run: supabase db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_PATH/data.sql" --data-only --use-copy
+
+      - name: Commit backups
+        if: env.BACKUP_ENABLED == 'true'
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          commit_message: Supabase backup (${{ env.BACKUP_DATE }})
+          commit_message: Supabase backup (${{ env.BACKUP_PATH }})
           commit_user_name: GitHub Actions
           commit_user_email: actions@github.com
-          file_pattern: db_backups/*
+          file_pattern: prisma/backups/$TIMESTAMP/*
