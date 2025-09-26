@@ -3,19 +3,16 @@ name: supabase-backup
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0'   # Every Sunday at midnight
-
-env:
-  BACKUP_ENABLED: true
+    - cron: '0 0 * * 0'  # Runs every Sunday at midnight
 
 jobs:
   backup:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      BACKUP_ENABLED: ${{ vars.BACKUP_ENABLED }}
+      BACKUP_ENABLED: true
     steps:
       - name: Check if backups are enabled
         run: |
@@ -27,22 +24,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up timestamp
+      - name: Set backup timestamp
         run: |
           BACKUP_DATE=$(date +'%Y-%m-%d_%H-%M-%S')
           echo "BACKUP_DATE=$BACKUP_DATE" >> $GITHUB_ENV
           mkdir -p db_backups/$BACKUP_DATE
 
-      - name: Install PostgreSQL client (for pg_dump)
+      - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Run pg_dump (schema + data)
+      - name: Run pg_dump to backup schema and data
         run: |
-          PGPASSWORD=$(echo $SUPABASE_DB_URL | sed -n 's/.*\/\/postgres:\(.*\)@.*/\1/p') \
-          pg_dump \
-            --dbname=$SUPABASE_DB_URL \
-            --format=plain \
-            --file=db_backups/$BACKUP_DATE/full_backup.sql
+          export PGPASSWORD=$(echo $SUPABASE_DB_URL | sed -n 's/.*\/\/postgres:\([^@]*\)@.*/\1/p')
+          pg_dump --dbname=$SUPABASE_DB_URL --format=plain --file=db_backups/$BACKUP_DATE/full_backup.sql
 
       - name: Commit backup to repo
         uses: stefanzweifel/git-auto-commit-action@v4
